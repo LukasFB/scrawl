@@ -320,6 +320,9 @@ pub struct Config {
     /// `"apple"` (default) or `"hex"`: which engine transcribes recordings (`transcribe`).
     #[serde(default)]
     pub transcriber: Option<String>,
+    /// None follows the system input; explicit selection is opt-in.
+    #[serde(default)]
+    pub microphone: Option<crate::audio::Microphone>,
     /// The Hex model to use when `transcriber` is `"hex"` (default: the first ready one of
     /// `hex::PREFERRED_MODELS`).
     #[serde(default)]

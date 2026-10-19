@@ -482,6 +482,8 @@ pub struct View {
     pub auto_send: bool,
     pub shortcuts: Vec<ShortcutView>,
     pub transcriber: TranscriberView,
+    pub microphones: Vec<crate::audio::Microphone>,
+    pub microphone: Option<crate::audio::Microphone>,
     pub video_export: bool,
     pub retention: RetentionView,
     /// How much the captures folder takes, once measured.
@@ -758,6 +760,7 @@ pub enum Effect {
 
 /// The outside world the window changes: Scrawl's hotkeys and the config file.
 pub trait Host {
+    fn microphones(&self) -> Vec<crate::audio::Microphone>;
     fn shortcuts(&self) -> Shortcuts;
     /// Registers both, keeping the old ones if macOS refuses one.
     fn set_shortcuts(&mut self, shortcuts: &Shortcuts) -> Result<(), ShortcutKind>;
@@ -911,6 +914,16 @@ impl Panel {
                 }
             }
             ("autoSend" | "videoExport", serde_json::Value::Bool(on)) => write(key, (*on).into()),
+            ("microphone", serde_json::Value::String(id)) => {
+                if id.is_empty() {
+                    write("microphone", serde_json::Value::Null);
+                } else if let Some(device) = host.microphones().into_iter().find(|d| d.id == *id) {
+                    write(
+                        "microphone",
+                        serde_json::to_value(device).expect("microphone serializes"),
+                    );
+                }
+            }
             ("transcriber", serde_json::Value::String(name)) => {
                 if let Some(engine) = crate::transcribe::Engine::parse(name) {
                     write("transcriber", engine.name().into());
@@ -1005,6 +1018,8 @@ impl Panel {
                     )
                 })
                 .collect(),
+            microphones: host.microphones(),
+            microphone: config.microphone.clone(),
             transcriber: TranscriberView {
                 engine: if menu.hex_checked { "hex" } else { "apple" },
                 hex_title: menu.hex_title,
@@ -1056,6 +1071,10 @@ pub struct AppHost<'a> {
 }
 
 impl Host for AppHost<'_> {
+    fn microphones(&self) -> Vec<crate::audio::Microphone> {
+        crate::audio::microphones()
+    }
+
     fn shortcuts(&self) -> Shortcuts {
         let (record, paste) = self.telemetry.shortcuts();
         Shortcuts { record, paste }
@@ -1313,6 +1332,13 @@ mod tests {
     }
 
     impl Host for Fake {
+        fn microphones(&self) -> Vec<crate::audio::Microphone> {
+            vec![crate::audio::Microphone {
+                id: "usb-1".into(),
+                name: "USB Microphone".into(),
+            }]
+        }
+
         fn shortcuts(&self) -> Shortcuts {
             self.shortcuts.clone()
         }
@@ -1699,6 +1725,33 @@ mod tests {
         set(&mut panel, &mut host, "retention", "forever".into());
         // "Forever" says it all; no caption.
         assert_eq!(panel.view(&host).retention.note, "");
+    }
+
+    #[test]
+    fn microphone_selection_persists_and_can_return_to_system_default() {
+        let dir = TempDir::new("microphone");
+        let mut host = fake(&dir);
+        std::fs::write(&host.path, r#"{"ingestToken":"secret"}"#).unwrap();
+        let mut panel = Panel::default();
+        assert!(panel.view(&host).microphone.is_none());
+        let select = |panel: &mut Panel, host: &mut Fake, id: &str| {
+            panel.on(
+                Action::Set {
+                    key: "microphone".into(),
+                    value: id.into(),
+                },
+                host,
+            );
+        };
+        select(&mut panel, &mut host, "usb-1");
+        let selected = Panel::default().view(&host).microphone.unwrap();
+        assert_eq!(selected.id, "usb-1");
+        assert_eq!(selected.name, "USB Microphone");
+        select(&mut panel, &mut host, "unknown-device");
+        assert_eq!(panel.view(&host).microphone, Some(selected));
+        select(&mut panel, &mut host, "");
+        assert!(panel.view(&host).microphone.is_none());
+        assert_eq!(read_json(&host.path)["ingestToken"], "secret");
     }
 
     #[test]

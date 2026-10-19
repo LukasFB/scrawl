@@ -6,6 +6,45 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 
 const SAMPLE_RATE: u32 = 16_000;
 
+/// Stable backend ID, with a display name retained when the device is disconnected.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Microphone {
+    pub id: String,
+    pub name: String,
+}
+
+pub fn microphones() -> Vec<Microphone> {
+    let Ok(devices) = cpal::default_host().input_devices() else {
+        return Vec::new();
+    };
+    devices
+        .filter_map(|device| {
+            Some(Microphone {
+                id: device.id().ok()?.to_string(),
+                name: device.description().ok()?.name().to_owned(),
+            })
+        })
+        .collect()
+}
+
+fn recording_device(preferred: Option<&Microphone>) -> Result<cpal::Device> {
+    let host = cpal::default_host();
+    if let Some(preferred) = preferred {
+        if let Ok(mut devices) = host.input_devices()
+            && let Some(device) =
+                devices.find(|device| device.id().is_ok_and(|id| id.to_string() == preferred.id))
+        {
+            return Ok(device);
+        }
+        crate::capture::scrawl_log(format!(
+            "Microphone {} unavailable; using system default",
+            preferred.name
+        ));
+    }
+    host.default_input_device()
+        .context("No microphone is available")
+}
+
 #[derive(Clone, Debug)]
 pub struct RecordedAudio {
     pub sample_count: usize,
@@ -66,9 +105,8 @@ impl AudioRecorder {
         samples: Arc<Mutex<Vec<f32>>>,
         error: Arc<Mutex<Option<String>>>,
     ) -> Result<cpal::Stream> {
-        let device = cpal::default_host()
-            .default_input_device()
-            .context("No microphone is available")?;
+        let config = crate::handoff::load_config_from(&crate::handoff::default_config_path());
+        let device = recording_device(config.microphone.as_ref())?;
         let supported = device.default_input_config()?;
         let config = supported.config();
         ensure!(

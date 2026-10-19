@@ -92,6 +92,11 @@ struct SettingsCommandLine: Decodable, Equatable {
   var error = false
 }
 
+struct SettingsMicrophone: Decodable, Equatable {
+  var id: String
+  var name: String
+}
+
 struct SettingsState: Decodable, Equatable {
   var version = "0.3.2"
   var login = SettingsLogin()
@@ -101,6 +106,8 @@ struct SettingsState: Decodable, Equatable {
     SettingsShortcut(kind: "paste", title: "Paste last capture", label: "⌥⇧V", key: "V"),
   ]
   var transcriber = SettingsTranscriber()
+  var microphones: [SettingsMicrophone] = []
+  var microphone: SettingsMicrophone?
   var videoExport = false
   var retention = SettingsRetention()
   var capturesSize: String?
@@ -699,7 +706,24 @@ struct SettingsView: View {
     var engines: [(id: String, title: String, enabled: Bool)] = [("apple", "Apple Speech", true)]
     engines.append(("hex", t.hexTitle, t.hexEnabled))
     let chosenModel = t.models.first(where: \.chosen)
+    let selected = state.microphone
+    let unavailable = selected.map { chosen in !state.microphones.contains { $0.id == chosen.id } } ?? false
+    var inputs: [(id: String, title: String, enabled: Bool)] = [("", "System Default", true)]
+    inputs += state.microphones.map { ($0.id, $0.name, true) }
+    if let selected, unavailable { inputs.append((selected.id, selected.name + " (unavailable)", false)) }
     return VStack(spacing: 0) {
+      SettingsGroup {
+        SettingsRow(title: "Microphone") {
+          SettingsPopup(value: selected.map { $0.name + (unavailable ? " (unavailable)" : "") } ?? "System Default",
+                        options: inputs, selected: selected?.id ?? "") {
+            model.set("microphone", $0)
+          }
+        }
+      }
+      SettingsCaption(text: unavailable
+        ? "This microphone is disconnected. Recordings use the system default until it reconnects."
+        : "Used for new recordings. System Default follows the input selected in macOS.")
+        .padding(.bottom, 16)
       SettingsGroup {
         SettingsRow(title: "Transcription") {
           SettingsPopup(value: t.engine == "hex" ? "Hex" : "Apple Speech", options: engines, selected: t.engine) {
@@ -1146,12 +1170,16 @@ final class SettingsWindow: NSObject, NSApplicationDelegate, NSWindowDelegate {
     var custom = base
     custom.shortcuts[0] = SettingsShortcut(kind: "record", title: "Record", label: "⌃⌥⌘R", key: "R", shift: false, control: true, option: true, command: true, isDefault: false)
     custom.login.on = true
+    base.microphones = [SettingsMicrophone(id: "usb-1", name: "USB Microphone")]
     var hex = base
+    hex.microphone = base.microphones.first
     hex.transcriber = SettingsTranscriber(engine: "hex", hexTitle: "Hex", hexEnabled: true, models: [
       SettingsModelOption(id: "parakeet-tdt-0.6b-v3", title: "Parakeet TDT v3", chosen: true),
       SettingsModelOption(id: "whisper-large-v3-turbo", title: "Whisper Large v3 Turbo", chosen: false),
     ])
     hex.videoExport = true
+    var disconnectedMic = base
+    disconnectedMic.microphone = SettingsMicrophone(id: "disconnected", name: "Studio Microphone")
     var missing = base
     missing.permissions[0].status = "granted"
     missing.permissions[0].relaunch = true
@@ -1184,6 +1212,7 @@ final class SettingsWindow: NSObject, NSApplicationDelegate, NSWindowDelegate {
       ("general-refused", .general, refused, []),
       ("recording", .recording, base, []),
       ("recording-hex", .recording, hex, []),
+      ("recording-disconnected", .recording, disconnectedMic, []),
       ("storage", .storage, base, []),
       ("permissions", .permissions, base, []),
       ("permissions-missing", .permissions, missing, []),
