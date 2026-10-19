@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Print the selected certificate SHA-1; local git config survives branch switches.
 set -euo pipefail
-REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+REPO_DIR="${SCRAWL_REPO_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 cd "${REPO_DIR}"
 requested="${SCRAWL_SIGN_IDENTITY:-$(git config --local --get scrawl.signingIdentity || true)}"
 requested="${requested:-Developer ID Application: Christopher Langton (QC99C9JE59)}"

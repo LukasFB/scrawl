@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+INSTALL_SCRIPTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_DIR="${SCRAWL_REPO_DIR:-$(cd "${INSTALL_SCRIPTS_DIR}/.." && pwd)}"
 # SCRAWL_APP_DIR builds the signed bundle somewhere else (staging for remote installs, see
 # install-app-remote.sh); SCRAWL_NO_LAUNCH=1 skips the ~/bin link and the restart.
 APP_DIR="${SCRAWL_APP_DIR:-${HOME}/Applications/Scrawl.app}"
@@ -13,7 +14,7 @@ SPARKLE_PUBLIC_KEY="mIek27lttJe8cIBqVZFhh6reRKjpTx1h9ZY9OKWPtuM="
 
 cd "${REPO_DIR}"
 # Resolve before building or replacing the installed app. Never silently change identity.
-IDENTITY="$(bash "${REPO_DIR}/scripts/signing-identity.sh")"
+IDENTITY="$(SCRAWL_REPO_DIR="${REPO_DIR}" bash "${INSTALL_SCRIPTS_DIR}/signing-identity.sh")"
 printf 'Signing Scrawl with %s\n' "${IDENTITY}"
 chmod +x "${REPO_DIR}/scripts/setup-sparkle.sh" "${REPO_DIR}/scripts/release-app.sh" 2>/dev/null || true
 SPARKLE_DIR="$("${REPO_DIR}/scripts/setup-sparkle.sh" 2>/dev/null || true)"

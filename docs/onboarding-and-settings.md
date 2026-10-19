@@ -52,3 +52,23 @@ Use the same certificate, bundle IDs, and installed path across rebuilds. Switch
 from an ad-hoc build to certificate signing can require granting permissions once
 more; subsequent builds have a stable designated requirement. No privacy grants
 are reset or edited by the installer.
+
+### Fork-only installer across feature branches
+
+Keep signing changes on `fix/persistent-local-signing` in the fork; do not merge
+that branch into upstream feature PRs. Configure a checkout-local Git alias once:
+
+```sh
+git config --local alias.scrawl-install '!f() { local_runner=$(git show refs/heads/fix/persistent-local-signing:scripts/install-fork-local.sh) && bash -c "$local_runner"; }; f'
+git scrawl-install
+```
+
+This extracts only the installer scripts into a temporary directory and builds
+whatever source (including uncommitted changes) is currently checked out. It
+never switches branches or adds signing files to the feature diff. The temporary
+installer runs `scripts/install-app.sh` with `SCRAWL_REPO_DIR` pointing at that
+checkout; certificate selection still comes from its local Git config. The alias
+and certificate selection survive branch switches and rebases. Do not use the
+upstream installer directly on feature branches: it can still fall back to ad-hoc
+signing. After cloning elsewhere, fetch the signing branch and configure the
+alias and certificate there too.
