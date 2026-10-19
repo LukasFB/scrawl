@@ -31,3 +31,24 @@ Launch at login is `SMAppService.mainApp` (only inside Scrawl.app). There's no D
 Agents › Command-line tool (`src/command_line.rs`) symlinks the app's own binary (its real path, which is how it finds `scrawl-helper`) into the first writable of `/opt/homebrew/bin`, `/usr/local/bin`, else `~/.local/bin`; it never asks for admin, never touches a `scrawl` that doesn't link to a Scrawl.app, and the Homebrew cask's `binary` link reads as installed. A bare `scrawl` from a terminal prints help instead of starting a second app. Agents › Agent skill shows `bunx skills add kitlangton/scrawl` (`skills/scrawl/SKILL.md`, also printed by `scrawl skill`); keep that file true to the CLI.
 
 Render every pane (dark, light, recorder listening, refused) with `scrawl-helper settings --render DIR`; test with `cargo test settings::`.
+
+## Stable local signing
+
+`install-app.sh` resolves a signing certificate before modifying the installed app.
+Set it once per checkout (not committed, shared by branches):
+
+```sh
+security find-identity -v -p codesigning
+git config --local scrawl.signingIdentity <certificate-SHA-1>
+```
+
+`SCRAWL_SIGN_IDENTITY` overrides that setting for one invocation. Without either,
+the original developer's identity is used. Names must match exactly and uniquely;
+use the SHA-1 when multiple certificates have the same name. Missing or ambiguous
+identities abort instead of silently falling back to ad-hoc signing. Explicit
+`SCRAWL_SIGN_IDENTITY=-` remains available for disposable builds, with a warning.
+
+Use the same certificate, bundle IDs, and installed path across rebuilds. Switching
+from an ad-hoc build to certificate signing can require granting permissions once
+more; subsequent builds have a stable designated requirement. No privacy grants
+are reset or edited by the installer.
