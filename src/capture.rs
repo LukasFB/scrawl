@@ -124,6 +124,7 @@ pub enum LiveOverlayEvent {
     /// ⌥⇧S (or the configured shortcut) went down; `shortcut::Shortcut` decides what it means.
     CaptureShortcut,
     PasteLatestShortcut,
+    CancelRecordingShortcut,
     UndoStroke,
     RequestSnapshot,
     /// The iPhone mirror ended on its own (unplugged, never found, or access denied).
@@ -159,7 +160,7 @@ impl Default for ShortcutConfig {
     }
 }
 
-/// Scrawl's two global shortcuts.
+/// Scrawl's configurable shortcuts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ShortcutKind {
@@ -167,15 +168,18 @@ pub enum ShortcutKind {
     Record,
     /// Paste the latest capture into the app in front (⌥⇧V).
     Paste,
+    /// Discard the active recording (Shift+Escape), observed by the key tap.
+    Cancel,
 }
 
 impl ShortcutKind {
-    pub const ALL: [Self; 2] = [Self::Record, Self::Paste];
+    pub const ALL: [Self; 3] = [Self::Record, Self::Paste, Self::Cancel];
 
     pub fn default_config(self) -> ShortcutConfig {
         match self {
             Self::Record => ShortcutConfig::default_record(),
             Self::Paste => ShortcutConfig::default_paste(),
+            Self::Cancel => ShortcutConfig::default_cancel(),
         }
     }
 
@@ -184,6 +188,7 @@ impl ShortcutKind {
         match self {
             Self::Record => 's',
             Self::Paste => 'v',
+            Self::Cancel => '\u{1b}',
         }
     }
 
@@ -191,6 +196,13 @@ impl ShortcutKind {
         match self {
             Self::Record => KEY_S,
             Self::Paste => KEY_V,
+            Self::Cancel => {
+                if cfg!(target_os = "windows") {
+                    0x1b
+                } else {
+                    53
+                }
+            }
         }
     }
 
@@ -198,12 +210,13 @@ impl ShortcutKind {
         match self {
             Self::Record => "Record",
             Self::Paste => "Paste last capture",
+            Self::Cancel => "Cancel recording",
         }
     }
 
     /// Whether it can be turned off. Record can't: it's the way into Scrawl.
     pub fn can_unset(self) -> bool {
-        self == Self::Paste
+        self != Self::Record
     }
 }
 
@@ -216,6 +229,14 @@ impl ShortcutConfig {
         }
     }
 
+    pub fn default_cancel() -> Self {
+        Self {
+            key_code: u32::from(ShortcutKind::Cancel.ansi_code()),
+            carbon_modifiers: CARBON_SHIFT_KEY,
+            label: shortcut_label(CARBON_SHIFT_KEY, "Esc"),
+        }
+    }
+
     pub fn default_paste() -> Self {
         Self {
             key_code: u32::from(layout_v_keycode()),
@@ -224,8 +245,7 @@ impl ShortcutConfig {
         }
     }
 
-    /// No shortcut: nothing is registered and no key press matches. Only the paste shortcut can
-    /// be turned off.
+    /// No shortcut: nothing is registered and no key press matches. Record cannot be turned off.
     pub fn unset() -> Self {
         Self {
             key_code: u32::MAX,
@@ -241,6 +261,9 @@ impl ShortcutConfig {
     /// Whether this is `kind`'s default, which also answers to its aliases (⌃⌥⇧, ⌘⌥⇧, ⌃⌥⌘
     /// and the ANSI key).
     pub fn is_default_for(&self, kind: ShortcutKind) -> bool {
+        if kind == ShortcutKind::Cancel {
+            return self == &Self::default_cancel();
+        }
         self.carbon_modifiers == CARBON_OPTION_KEY | CARBON_SHIFT_KEY
             && shortcut_parts(&self.label).1 == kind.default_char().to_ascii_uppercase().to_string()
     }
@@ -424,12 +447,19 @@ pub fn shortcut_matches(
         return true;
     }
     let is_key = keycode == layout_code || keycode == kind.ansi_code();
-    cfg.is_default_for(kind) && is_key && alt && (shift || (ctrl && cmd))
+    kind != ShortcutKind::Cancel
+        && cfg.is_default_for(kind)
+        && is_key
+        && alt
+        && (shift || (ctrl && cmd))
 }
 
 /// The active layout's key for `kind`'s default letter (Windows' hooks and poller match on it).
 #[cfg_attr(target_os = "macos", allow(dead_code))]
 pub fn layout_default_keycode(kind: ShortcutKind) -> u16 {
+    if kind == ShortcutKind::Cancel {
+        return kind.ansi_code();
+    }
     key_code_for_char(kind.default_char()).unwrap_or(kind.ansi_code())
 }
 
@@ -440,7 +470,7 @@ pub(crate) fn hotkey_combos(kind: ShortcutKind, cfg: &ShortcutConfig) -> Vec<(u3
         return Vec::new();
     }
     let mut combos = vec![(cfg.key_code, cfg.carbon_modifiers)];
-    if !cfg.is_default_for(kind) {
+    if kind == ShortcutKind::Cancel || !cfg.is_default_for(kind) {
         return combos;
     }
     let mut codes = vec![cfg.key_code];
@@ -691,6 +721,7 @@ pub struct SharedCaptureTelemetry {
     /// The record shortcut (`crate::settings` loads and saves it).
     pub shortcut: Mutex<ShortcutConfig>,
     pub paste_shortcut: Mutex<ShortcutConfig>,
+    pub cancel_shortcut: Mutex<ShortcutConfig>,
     /// Settings is recording a new shortcut: none of Scrawl's fire (`pause_shortcuts`).
     pub shortcuts_paused: AtomicBool,
     pub started_at: Mutex<Instant>,
@@ -756,6 +787,7 @@ impl SharedCaptureTelemetry {
             capture_mode: AtomicU64::new(0),
             shortcut: Mutex::new(shortcuts.record),
             paste_shortcut: Mutex::new(shortcuts.paste),
+            cancel_shortcut: Mutex::new(shortcuts.cancel),
             shortcuts_paused: AtomicBool::new(false),
             started_at: Mutex::new(Instant::now()),
             picker_started_at: Mutex::new(Instant::now()),
@@ -835,6 +867,45 @@ impl SharedCaptureTelemetry {
                 .ui_sender
                 .try_send(LiveOverlayEvent::PasteLatestShortcut);
         }
+    }
+
+    /// A cancel binding is observed rather than globally reserved, so Escape keeps working
+    /// in other apps. Only a fresh key press during a recording can request a discard.
+    pub fn handle_cancel_key(
+        &self,
+        keycode: u16,
+        cmd: bool,
+        ctrl: bool,
+        alt: bool,
+        shift: bool,
+        repeat: bool,
+    ) -> bool {
+        if repeat
+            || self.shortcuts_paused.load(Ordering::Acquire)
+            || !self.active.load(Ordering::Acquire)
+        {
+            return false;
+        }
+        let cfg = self
+            .cancel_shortcut
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !shortcut_matches(
+            ShortcutKind::Cancel,
+            &cfg,
+            ShortcutKind::Cancel.ansi_code(),
+            keycode,
+            cmd,
+            ctrl,
+            alt,
+            shift,
+        ) {
+            return false;
+        }
+        let _ = self
+            .ui_sender
+            .try_send(LiveOverlayEvent::CancelRecordingShortcut);
+        true
     }
 
     pub fn matches_shortcut(
@@ -1511,6 +1582,42 @@ pub fn write_bundle_artifacts(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cancel_shortcut_only_discards_on_a_fresh_exact_press_while_recording() {
+        let (tx, rx) = flume::unbounded();
+        let telemetry = SharedCaptureTelemetry::new(tx);
+        *telemetry.cancel_shortcut.lock().unwrap() = ShortcutConfig::default_cancel();
+        let esc = ShortcutKind::Cancel.ansi_code();
+        assert!(!telemetry.handle_cancel_key(esc, false, false, false, true, false));
+        telemetry.active.store(true, Ordering::Release);
+        assert!(!telemetry.handle_cancel_key(esc, false, false, false, false, false));
+        assert!(!telemetry.handle_cancel_key(esc, false, false, true, true, false));
+        assert!(!telemetry.handle_cancel_key(esc, true, false, false, true, false));
+        assert!(!telemetry.handle_cancel_key(esc, false, false, false, true, true));
+        telemetry.shortcuts_paused.store(true, Ordering::Release);
+        assert!(!telemetry.handle_cancel_key(esc, false, false, false, true, false));
+        telemetry.shortcuts_paused.store(false, Ordering::Release);
+        assert!(rx.is_empty());
+        assert!(telemetry.handle_cancel_key(esc, false, false, false, true, false));
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(LiveOverlayEvent::CancelRecordingShortcut)
+        ));
+        *telemetry.cancel_shortcut.lock().unwrap() = ShortcutConfig::unset();
+        assert!(!telemetry.handle_cancel_key(esc, false, false, false, true, false));
+        *telemetry.cancel_shortcut.lock().unwrap() = ShortcutConfig {
+            key_code: u32::from(KEY_S),
+            carbon_modifiers: CARBON_CONTROL_KEY,
+            label: "custom".into(),
+        };
+        assert!(!telemetry.handle_cancel_key(esc, false, false, false, true, false));
+        assert!(telemetry.handle_cancel_key(KEY_S, false, true, false, false, false));
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(LiveOverlayEvent::CancelRecordingShortcut)
+        ));
+    }
 
     #[test]
     fn screen_stop_joins_worker_before_collecting_its_final_media() {

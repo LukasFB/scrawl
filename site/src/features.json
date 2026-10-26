@@ -22,6 +22,18 @@
   ],
   "features": [
     {
+      "id": "cancel-recording-shortcut",
+      "group": "record",
+      "name": "Cancel recording shortcut",
+      "says": "Discard an active recording without saving or sending it, even while another app has focus.",
+      "status": "main",
+      "platforms": ["mac", "windows"],
+      "shortcuts": [{ "keys": "Shift+Escape", "does": "Cancel the current recording" }],
+      "config": [{ "key": "shortcuts.cancel", "value": "{keyCode, modifiers, label} or null", "does": "Rebind or disable cancellation; defaults to Shift+Escape" }],
+      "note": "Configured in General. On macOS the global key tap requires Accessibility permission.",
+      "docs": ["docs/capture.md", "docs/onboarding-and-settings.md"]
+    },
+    {
       "id": "record-screen",
       "group": "start",
       "name": "Record the screen",

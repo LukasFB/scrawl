@@ -469,7 +469,13 @@ impl SettingsWindow {
             return;
         };
         let keystroke = &event.keystroke;
-        if keystroke.key == "escape" {
+        if keystroke.key == "escape"
+            && (kind != ShortcutKind::Cancel
+                || !(keystroke.modifiers.shift
+                    || keystroke.modifiers.control
+                    || keystroke.modifiers.alt
+                    || keystroke.modifiers.platform))
+        {
             self.act(Action::CancelShortcut);
             return;
         }
@@ -509,6 +515,7 @@ impl SettingsWindow {
 fn key_code(key: &str) -> Option<u32> {
     #[cfg(target_os = "windows")]
     let named: &[(&str, u32)] = &[
+        ("escape", 0x1B),
         ("space", 0x20),
         ("enter", 0x0D),
         ("tab", 0x09),
@@ -521,6 +528,7 @@ fn key_code(key: &str) -> Option<u32> {
     ];
     #[cfg(not(target_os = "windows"))]
     let named: &[(&str, u32)] = &[
+        ("escape", 53),
         ("space", 49),
         ("enter", 36),
         ("tab", 48),
@@ -956,6 +964,8 @@ impl SettingsWindow {
             "Press the new shortcut. Esc cancels.".to_owned()
         } else if let Some(error) = &shortcut.error {
             error.clone()
+        } else if kind == ShortcutKind::Cancel {
+            "Discards the active recording without saving or sending it.".to_owned()
         } else if kind == ShortcutKind::Paste {
             "Pastes the last capture into the app in front.".to_owned()
         } else {

@@ -3,7 +3,7 @@
 //! Everything is decided and written here: `~/.config/scrawl/config.json` keeps its other keys
 //! and its `0600` mode (it holds the ingest token).
 //!
-//! Panes: General (launch at login, sending dev-site captures, the two shortcuts), Recording
+//! Panes: General (launch at login, sending dev-site captures, the three shortcuts), Recording
 //! (transcriber, video export), Storage (how long recordings are kept), Permissions (the
 //! onboarding checklist, to fix things later), Agents (`scrawl` on PATH, the skill's install
 //! command) and About.
@@ -25,11 +25,12 @@ use crate::onboarding::{Grants, Permission, Status};
 
 // MARK: Shortcuts in the config
 
-/// Scrawl's two shortcuts.
+/// Scrawl's configurable shortcuts.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Shortcuts {
     pub record: ShortcutConfig,
     pub paste: ShortcutConfig,
+    pub cancel: ShortcutConfig,
 }
 
 impl Default for Shortcuts {
@@ -37,6 +38,7 @@ impl Default for Shortcuts {
         Self {
             record: ShortcutConfig::default_record(),
             paste: ShortcutConfig::default_paste(),
+            cancel: ShortcutConfig::default_cancel(),
         }
     }
 }
@@ -54,6 +56,7 @@ impl Shortcuts {
         match kind {
             ShortcutKind::Record => &self.record,
             ShortcutKind::Paste => &self.paste,
+            ShortcutKind::Cancel => &self.cancel,
         }
     }
 
@@ -61,6 +64,7 @@ impl Shortcuts {
         match kind {
             ShortcutKind::Record => self.record = cfg,
             ShortcutKind::Paste => self.paste = cfg,
+            ShortcutKind::Cancel => self.cancel = cfg,
         }
     }
 
@@ -127,6 +131,7 @@ fn kind_key(kind: ShortcutKind) -> &'static str {
     match kind {
         ShortcutKind::Record => "record",
         ShortcutKind::Paste => "paste",
+        ShortcutKind::Cancel => "cancel",
     }
 }
 
@@ -442,6 +447,10 @@ fn reserved(modifiers: u32, key: &str) -> bool {
     .contains(&(modifiers, key))
 }
 
+fn hotkey_conflict(cfg: &ShortcutConfig, kind: ShortcutKind, bound: &ShortcutConfig) -> bool {
+    crate::capture::hotkey_combos(kind, bound).contains(&(cfg.key_code, cfg.carbon_modifiers))
+}
+
 /// Checks a pressed combination for `kind` and names it. `other` is Scrawl's other shortcut.
 pub fn validate(
     kind: ShortcutKind,
@@ -450,9 +459,15 @@ pub fn validate(
 ) -> Result<ShortcutConfig, Rejection> {
     let modifiers = pressed.modifiers
         & (CARBON_CMD_KEY | CARBON_CONTROL_KEY | CARBON_OPTION_KEY | CARBON_SHIFT_KEY);
-    let key = key_label(pressed.key_code, &pressed.key).ok_or(Rejection::UnsupportedKey)?;
+    let cancel_escape =
+        kind == ShortcutKind::Cancel && pressed.key_code == KEY_ESCAPE && modifiers != 0;
+    let key = if cancel_escape {
+        "Esc".to_owned()
+    } else {
+        key_label(pressed.key_code, &pressed.key).ok_or(Rejection::UnsupportedKey)?
+    };
     let strong = modifiers & (CARBON_CMD_KEY | CARBON_CONTROL_KEY | CARBON_OPTION_KEY) != 0;
-    if !strong && !is_function_key(pressed.key_code) {
+    if !strong && !is_function_key(pressed.key_code) && !cancel_escape {
         return Err(Rejection::NoModifier);
     }
     let label = format!("{}{key}", modifier_symbols(modifiers));
@@ -466,7 +481,7 @@ pub fn validate(
     };
     let other_kind = match kind {
         ShortcutKind::Record => ShortcutKind::Paste,
-        ShortcutKind::Paste => ShortcutKind::Record,
+        ShortcutKind::Paste | ShortcutKind::Cancel => ShortcutKind::Record,
     };
     if cfg.key_code == other.key_code && cfg.carbon_modifiers == other.carbon_modifiers
         || cfg.label == other.label
@@ -1091,7 +1106,7 @@ impl Panel {
                 }
                 let other = match kind {
                     ShortcutKind::Record => &shortcuts.paste,
-                    ShortcutKind::Paste => &shortcuts.record,
+                    ShortcutKind::Paste | ShortcutKind::Cancel => &shortcuts.record,
                 };
                 match validate(kind, &pressed, other) {
                     Ok(cfg) => self.apply(kind, cfg, &mut shortcuts, host),
@@ -1161,6 +1176,17 @@ impl Panel {
         shortcuts: &mut Shortcuts,
         host: &mut dyn Host,
     ) {
+        if !cfg.is_unset() {
+            if let Some(other) = ShortcutKind::ALL.into_iter().find(|&other| {
+                other != kind && {
+                    let bound = shortcuts.get(other);
+                    hotkey_conflict(&cfg, other, bound)
+                }
+            }) {
+                self.error = Some((kind, Rejection::Taken(other).message()));
+                return;
+            }
+        }
         if shortcuts.get(kind) == &cfg {
             self.error = None;
             return;
@@ -1432,7 +1458,16 @@ pub struct AppHost<'a> {
 impl Host for AppHost<'_> {
     fn shortcuts(&self) -> Shortcuts {
         let (record, paste) = self.telemetry.shortcuts();
-        Shortcuts { record, paste }
+        Shortcuts {
+            record,
+            paste,
+            cancel: self
+                .telemetry
+                .cancel_shortcut
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone(),
+        }
     }
 
     fn set_shortcuts(&mut self, shortcuts: &Shortcuts) -> Result<(), ShortcutKind> {
@@ -1441,6 +1476,11 @@ impl Host for AppHost<'_> {
             shortcuts.record.clone(),
             shortcuts.paste.clone(),
         )?;
+        *self
+            .telemetry
+            .cancel_shortcut
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = shortcuts.cancel.clone();
         note_paste_label(&shortcuts.paste.label);
         Ok(())
     }
@@ -1833,14 +1873,45 @@ mod tests {
     }
 
     #[test]
-    fn a_shortcut_needs_a_real_modifier_and_a_free_key() {
-        let paste = ShortcutConfig::default_paste();
-        let ok = validate(
-            ShortcutKind::Record,
-            &pressed(R, CTRL_OPT, "r"),
-            &paste,
+    fn cancel_shortcut_accepts_modified_escape_and_persists() {
+        let dir = TempDir::new("cancel");
+        let path = dir.0.join("cancel-config.json");
+        let legacy = dir.0.join("missing.json");
+        let default = ShortcutConfig::default_cancel();
+        assert_eq!(Shortcuts::load_from(&path, &legacy).0.cancel, default);
+        let cfg = validate(
+            ShortcutKind::Cancel,
+            &pressed(KEY_ESCAPE, CARBON_SHIFT_KEY, ""),
+            &ShortcutConfig::default_record(),
         )
         .unwrap();
+        assert_eq!(cfg, default);
+        assert!(
+            validate(
+                ShortcutKind::Cancel,
+                &pressed(KEY_ESCAPE, 0, ""),
+                &ShortcutConfig::default_record()
+            )
+            .is_err()
+        );
+        let custom = validate(
+            ShortcutKind::Cancel,
+            &pressed(R, CTRL_OPT, "r"),
+            &ShortcutConfig::default_record(),
+        )
+        .unwrap();
+        save_shortcut_in(&path, ShortcutKind::Cancel, &custom).unwrap();
+        assert_eq!(Shortcuts::load_from(&path, &legacy).0.cancel, custom);
+        save_shortcut_in(&path, ShortcutKind::Cancel, &ShortcutConfig::unset()).unwrap();
+        assert!(Shortcuts::load_from(&path, &legacy).0.cancel.is_unset());
+        save_shortcut_in(&path, ShortcutKind::Cancel, &default).unwrap();
+        assert_eq!(Shortcuts::load_from(&path, &legacy).0.cancel, default);
+    }
+
+    #[test]
+    fn a_shortcut_needs_a_real_modifier_and_a_free_key() {
+        let paste = ShortcutConfig::default_paste();
+        let ok = validate(ShortcutKind::Record, &pressed(R, CTRL_OPT, "r"), &paste).unwrap();
         assert_eq!(ok.label, label(CTRL_OPT, "R"));
         assert_eq!(ok.key_label(), "R");
         // Labels follow the platform's order whatever order the bits come in.

@@ -154,6 +154,7 @@ struct SettingsState: Decodable, Equatable {
   var shortcuts: [SettingsShortcut] = [
     SettingsShortcut(),
     SettingsShortcut(kind: "paste", title: "Paste last capture", label: "⌥⇧V", key: "V", clearable: true),
+    SettingsShortcut(kind: "cancel", title: "Cancel recording", label: "⇧Esc", key: "Esc", option: false, clearable: true),
   ]
   var microphone = SettingsMicrophone()
   var transcriber = SettingsTranscriber()
@@ -379,7 +380,7 @@ final class KeyClock: ObservableObject {
 /// Sizes: 16 titles, 14 rows, 13 keycaps, 12 captions.
 enum SettingsMetrics {
   static let width: CGFloat = 620
-  static let height: CGFloat = 448
+  static let height: CGFloat = 548
   static let sidebar: CGFloat = 210
   static let titlebar: CGFloat = 52
   static let inset: CGFloat = 20
@@ -782,6 +783,7 @@ struct ShortcutRecorder: View {
   private var caption: String {
     if shortcut.recording { return shortcut.clearable ? "Esc cancels. Delete turns it off." : "Esc cancels." }
     if let error = shortcut.error { return error }
+    if shortcut.kind == "cancel" { return "Discards the active recording without saving or sending it." }
     return shortcut.kind == "paste"
       ? "Pastes the last capture into the app in front."
       : "Records the screen. Press again to finish."
@@ -895,7 +897,8 @@ struct SettingsView: View {
       }
       .frame(height: SettingsMetrics.titlebar)
       switch pane {
-      case .general: general
+      case .general:
+        if model.rendering { general } else { ScrollView { general.padding(.bottom, 16) } }
       case .recording: recording
       case .storage: storage
       case .permissions: permissions
@@ -1416,7 +1419,7 @@ final class SettingsWindow: NSObject, NSApplicationDelegate, NSWindowDelegate {
     if on, monitor == nil {
       monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
         guard let self, let kind = self.model.state.recording else { return event }
-        if event.keyCode == UInt16(kVK_Escape) {
+        if event.keyCode == UInt16(kVK_Escape) && (kind != "cancel" || event.modifierFlags.intersection([.command, .shift, .option, .control]).isEmpty) {
           self.model.act("cancel-shortcut")
           return nil
         }

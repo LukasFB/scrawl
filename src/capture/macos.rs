@@ -494,6 +494,7 @@ fn register_shortcuts(
                 (ShortcutKind::Record, 0) => HOTKEY_ID_TOGGLE,
                 (ShortcutKind::Record, i) => HOTKEY_ID_ALT1 + i as u32,
                 (ShortcutKind::Paste, i) => HOTKEY_ID_PASTE_BASE + i as u32,
+                (ShortcutKind::Cancel, _) => unreachable!("cancel uses the key tap"),
             };
             let rc = unsafe {
                 RegisterEventHotKey(
@@ -1624,6 +1625,10 @@ unsafe extern "C" fn key_tap_callback(
     let alt = (flags & FLAG_ALTERNATE) != 0;
     let shift = (flags & FLAG_SHIFT) != 0;
     let keycode = unsafe { CGEventGetIntegerValueField(event, KEYBOARD_EVENT_KEYCODE) } as u16;
+    let repeat = unsafe { CGEventGetIntegerValueField(event, KEYBOARD_EVENT_AUTOREPEAT) } != 0;
+    if telemetry.handle_cancel_key(keycode, cmd, ctrl, alt, shift, repeat) {
+        return event;
+    }
     if telemetry.matches_shortcut(keycode, cmd, ctrl, alt, shift) {
         // Holding S repeats the key; only a fresh press counts.
         if unsafe { CGEventGetIntegerValueField(event, KEYBOARD_EVENT_AUTOREPEAT) } == 0 {

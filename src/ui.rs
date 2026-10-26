@@ -5479,6 +5479,11 @@ pub fn run_app(
                     while let Ok(ev) = ui_receiver.try_recv() {
                         loop_coord.update(cx, |coord, cx| match ev {
                             LiveOverlayEvent::CaptureShortcut => coord.press_shortcut(cx),
+                            LiveOverlayEvent::CancelRecordingShortcut => {
+                                if coord.is_recording() {
+                                    coord.cancel_recording(cx);
+                                }
+                            }
                             LiveOverlayEvent::PasteLatestShortcut => {
                                 if !coord.is_recording() && !coord.is_selecting() {
                                     coord.paste_latest(cx);

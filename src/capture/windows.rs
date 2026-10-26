@@ -532,6 +532,7 @@ fn hotkey_id(kind: ShortcutKind, index: usize) -> i32 {
         (ShortcutKind::Record, 0) => HOTKEY_ID_TOGGLE,
         (ShortcutKind::Record, i) => HOTKEY_ID_ALT1 + i as i32,
         (ShortcutKind::Paste, i) => HOTKEY_ID_PASTE_BASE + i as i32,
+        (ShortcutKind::Cancel, _) => unreachable!("cancel uses the keyboard hook"),
     }
 }
 
@@ -665,9 +666,8 @@ pub fn set_shortcuts(
 ) -> Result<(), ShortcutKind> {
     let (old_record, old_paste) = telemetry.shortcuts();
     if !telemetry.shortcuts_paused.load(Ordering::Acquire)
-        && let Some(Err(kind)) = ask_hotkey_thread(|reply| {
-            HotkeyRequest::Register(record.clone(), paste.clone(), reply)
-        })
+        && let Some(Err(kind)) =
+            ask_hotkey_thread(|reply| HotkeyRequest::Register(record.clone(), paste.clone(), reply))
     {
         let _ = ask_hotkey_thread(|reply| HotkeyRequest::Register(old_record, old_paste, reply));
         return Err(kind);
@@ -813,10 +813,15 @@ fn handle_hook_event(telemetry: &SharedCaptureTelemetry, event: HookEvent) {
             if telemetry.shortcuts_paused.load(Ordering::Acquire) {
                 return;
             }
+            if telemetry.handle_cancel_key(vk, mods.win, mods.ctrl, mods.alt, mods.shift, repeat) {
+                return;
+            }
             let (record, paste) = telemetry.shortcuts();
             let hit = |kind: ShortcutKind, cfg: &ShortcutConfig| {
                 let layout = layout_default_keycode(kind);
-                shortcut_matches(kind, cfg, layout, vk, mods.win, mods.ctrl, mods.alt, mods.shift)
+                shortcut_matches(
+                    kind, cfg, layout, vk, mods.win, mods.ctrl, mods.alt, mods.shift,
+                )
             };
             if hit(ShortcutKind::Record, &record) {
                 if !repeat {
@@ -979,6 +984,7 @@ pub fn start_global_input_tap(telemetry: Arc<SharedCaptureTelemetry>) {
 fn run_key_poller(telemetry: Arc<SharedCaptureTelemetry>) {
     let mut prev_shortcut = false;
     let mut prev_paste = false;
+    let mut prev_cancel = false;
     let mut prev_shift_ink = false;
     let mut prev_undo = false;
     let mut prev_escape = false;
@@ -1022,6 +1028,16 @@ fn run_key_poller(telemetry: Arc<SharedCaptureTelemetry>) {
                 key_down(code) && shortcut_matches(kind, cfg, code, code, win, ctrl, alt, shift)
             })
         };
+        let cancel_cfg = telemetry
+            .cancel_shortcut
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        let cancel_now = shortcut_down(ShortcutKind::Cancel, &cancel_cfg);
+        if cancel_now && !prev_cancel && !KEYBOARD_HOOK_LIVE.load(Ordering::Acquire) {
+            telemetry.handle_cancel_key(cancel_cfg.key_code as u16, win, ctrl, alt, shift, false);
+        }
+        prev_cancel = cancel_now;
         let shortcut_now = shortcut_down(ShortcutKind::Record, &record_cfg);
         if shortcut_now && !prev_shortcut {
             telemetry.emit_capture_shortcut();
