@@ -24,4 +24,6 @@ The picker opens on the pointer's display and follows the pointer between displa
 
 ## Recording target preference
 
+Recent Area reuses only the saved rectangle. Each start queries the current windows again to resolve the app and window title; it never reuses the picker's cached window metadata.
+
 Recording settings › What to record is always available (no experiment): Screen (the default) records immediately; Window and Area open their picker; Recent Area records the last area immediately. With no saved area, or if that rectangle no longer fits a connected display, Recent Area opens the Area picker. `whatToRecord` and the global point rectangle `recentArea` persist in config.json across restarts. The picker adds a Recent Area chip once an area has been recorded and preselects it after an area recording; Record, Return or clicking the highlighted area reuses it without dragging. The shortcut starts the configured target when its modifiers are released.

@@ -1314,7 +1314,10 @@ impl ScrawlCoordinator {
 
     fn record_recent_area(&mut self, cx: &mut Context<Self>) {
         if let Some([x, y, w, h]) = usable_recent_area().map(|r| r.map(f64::from)) {
-            let target = region_target(x, y, w, h, &self.selectable_windows);
+            // Only the rectangle is reusable: the picker's window snapshot can be from
+            // a different app or an earlier recording. Resolve metadata again at start.
+            let windows = list_selectable_windows();
+            let target = region_target(x, y, w, h, &windows);
             self.start_recording_with_target(target, cx);
         } else {
             self.open_picker(Some(SelectionMode::Area), cx);
